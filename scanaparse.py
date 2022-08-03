@@ -2,8 +2,11 @@ import re
 import csv
 from enum import Enum
 
-IDX_TIME = 0
-IDX_I2C_EVENT = 1
+LOG_IDX_TIME = 0
+LOG_IDX_I2C_EVENT = 1
+MSG_DATA_ANY = [256]
+MSG_ADDR_ANY = 256
+
 
 def read_log(file):
     with open(file, encoding='utf_8') as log_file:
@@ -64,7 +67,7 @@ class I2cEventParser():
         event_type = I2cEventType.NONE
         for e in self.event_pattern.keys():
             pattern = self.event_pattern[e]
-            match = re.search(pattern, log_event[IDX_I2C_EVENT])
+            match = re.search(pattern, log_event[LOG_IDX_I2C_EVENT])
             if (match):
                 event_type = e
                 if (self._event_has_data(e)):
@@ -84,10 +87,12 @@ class I2cMsgType(Enum):
     INVALID = 0
     READ = 1
     WRITE = 2
+    ANY = 3
 
 class I2cAck(Enum):
     NACK = 0
     ACK = 1
+    ANY = 3
 
 class I2cMsg():
     _STATE_INVALID = -1
@@ -111,6 +116,15 @@ class I2cMsg():
             (self._events_are_valid_msg(events))):
             self._deserialize(events)
     
+    def dict(self):
+        dict = {
+        'type': self.type,
+        'addr': self.addr,
+        'data': self.data,
+        'tgt_ack': self.tgt_ack
+        }
+        return dict
+
     def _events_are_valid_msg(self, events):
         valid = True
         if ((events[0].type != I2cEventType.START) or
@@ -125,8 +139,7 @@ class I2cMsg():
                  valid = False
         return valid
 
-    def type(self, events):
-        
+    def type(self, events):        
         msg_type = I2cMsgType.INVALID
         if (self._events_are_valid(events) == False):
             return msg_type
@@ -229,4 +242,84 @@ class I2cStream():
 
     def num_msgs(self):
         return len(self._msgs)
+
+class I2cMsgPattern():
+    _WILDCARD = {
+        'type': I2cMsgType.ANY,
+        'addr': MSG_ADDR_ANY,
+        'data': MSG_DATA_ANY,
+        'tgt_ack': I2cAck.ANY
+        }   
+
+    def __init__(self, type = I2cMsgType.ANY,
+                    addr = MSG_ADDR_ANY,
+                    data = MSG_DATA_ANY,
+                    tgt_ack = I2cAck.ANY):
+        self.type = type
+        self.addr = addr
+        self.data = data
+        self.tgt_ack = tgt_ack
+
+    def dict(self):
+        dict = {
+        'type': self.type,
+        'addr': self.addr,
+        'data': self.data,
+        'tgt_ack': self.tgt_ack
+        }
+        return dict
+
+    def wildcard(self):
+        return self._WILDCARD
+
+class I2cMsgQuery():
+    @classmethod
+    def find_msg(cls, pattern, msgs):
+        match_msgs = []
+
+        for idx_msg, msg in msgs:
+            if (cls._fullmatch(pattern, msg)):
+                match_msgs.append((idx_msg, msg))
         
+        return match_msgs
+
+    @classmethod
+    def find_sequence(cls, patterns, msgs):
+        match_seqs = []
+        num_patterns = len(patterns)
+
+        for idx_msg in range(len(msgs)-num_patterns+1):
+            match_msgs = []
+            
+            for idx_ptn, ptn in enumerate(patterns):
+                msg = msgs[idx_msg+idx_ptn]
+                if (cls._fullmatch(ptn, msg)):
+                    match_msgs.append((idx_msg+idx_ptn, msg))
+                else:
+                    break
+            
+            if (len(match_msgs) == num_patterns):
+                match_seqs.append(match_msgs)
+            
+            idx_msg += 1
+
+        return match_seqs
+        
+    @classmethod
+    def _fullmatch(cls, pattern, msg):
+        matches = {}
+
+        for key in pattern.dict().keys():
+            matches[key] = False
+            if ((pattern.dict()[key] == msg.dict()[key]) or
+                (pattern.dict()[key] == pattern.wildcard()[key])):
+                matches[key] = True
+        
+        fullmatch = True
+
+        for key in matches.keys():
+            if matches[key] == False:
+                fullmatch = False
+                break
+        return fullmatch
+                
